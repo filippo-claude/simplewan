@@ -11,7 +11,6 @@ package route
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -21,18 +20,21 @@ import (
 )
 
 // IfaceMetric returns the configured netifd route metric for an interface
-// (uci network.<iface>.metric), or dflt if it is unset or unparseable. This is
-// the base metric the daemon keeps the interface at when it is selected, so the
-// resting state matches what netifd installs and needs no correction.
-func IfaceMetric(iface string, dflt int) int {
+// (uci network.<iface>.metric) and whether it was actually set. This is the
+// base metric the daemon keeps the interface at when it is selected, so the
+// resting state matches what netifd installs and needs no correction. When it
+// is unset the caller gets dflt but should warn: netifd then installs the route
+// at metric 0, and the daemon will have to keep correcting it to impose an
+// ordering (route churn).
+func IfaceMetric(iface string, dflt int) (metric int, configured bool) {
 	out, err := exec.Command("uci", "-q", "get", fmt.Sprintf("network.%s.metric", iface)).Output()
 	if err != nil {
-		return dflt
+		return dflt, false
 	}
 	if v, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
-		return v
+		return v, true
 	}
-	return dflt
+	return dflt, false
 }
 
 // ResolveDevice returns the L3 device for a netifd interface via ubus.
@@ -149,6 +151,27 @@ func HasDefault(linkIndex int) bool {
 	return len(byLink[linkIndex]) > 0
 }
 
+// DefaultMetric returns the metric of the device's IPv4 default route and
+// whether one exists. If several are present (briefly, mid-reorder) the lowest
+// is returned, since that is the one the kernel actually uses.
+func DefaultMetric(linkIndex int) (metric int, ok bool) {
+	byLink, err := defaultRoutesByLink()
+	if err != nil {
+		return 0, false
+	}
+	rs := byLink[linkIndex]
+	if len(rs) == 0 {
+		return 0, false
+	}
+	m := rs[0].Priority
+	for _, r := range rs[1:] {
+		if r.Priority < m {
+			m = r.Priority
+		}
+	}
+	return m, true
+}
+
 // Subscribe delivers a token on ch whenever an IPv4 route changes. The caller
 // re-runs its (idempotent) enforcement on each token. Closing done stops it.
 func Subscribe(ch chan<- struct{}, done <-chan struct{}) error {
@@ -170,12 +193,12 @@ func Subscribe(ch chan<- struct{}, done <-chan struct{}) error {
 	return nil
 }
 
-// FlushConntrack drops the conntrack table so existing flows re-establish over
-// the newly selected WAN. Best-effort; missing module is not an error.
+// FlushConntrack drops the IPv4 conntrack table so existing flows re-establish
+// over the newly selected WAN, via the ctnetlink interface (the /proc/net entry
+// is read-only on modern kernels). Only IPv4 is flushed — netlink's
+// ConntrackTableFlush scopes the request to AF_INET — which is exactly right
+// here: the daemon manages only IPv4 routing, and IPv6 has no NAT to
+// re-evaluate. Best-effort: the caller logs and ignores any error.
 func FlushConntrack() error {
-	const f = "/proc/net/nf_conntrack"
-	if _, err := os.Stat(f); err != nil {
-		return nil
-	}
-	return os.WriteFile(f, []byte("f"), 0)
+	return netlink.ConntrackTableFlush(netlink.ConntrackTable)
 }

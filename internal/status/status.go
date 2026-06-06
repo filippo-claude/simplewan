@@ -18,17 +18,16 @@ const File = Dir + "/status.json"
 
 // Iface is the per-WAN status.
 type Iface struct {
-	Name       string `json:"name"`
-	IfName     string `json:"ifname"`
-	Device     string `json:"device"`
-	Primary    bool   `json:"primary"`
-	Online     bool   `json:"online"`
-	Selected   bool   `json:"selected"`
-	HasRoute   bool   `json:"has_route"`
-	Metric     int    `json:"metric"`
-	LossPct    int    `json:"loss_pct"`
-	RTTms      int64  `json:"rtt_ms"`
-	LastChange int64  `json:"last_change"` // unix seconds
+	Name     string `json:"name"`
+	IfName   string `json:"ifname"`
+	Device   string `json:"device"`
+	Primary  bool   `json:"primary"`
+	Online   bool   `json:"online"`
+	Selected bool   `json:"selected"`
+	HasRoute bool   `json:"has_route"`
+	Metric   int    `json:"metric"`
+	LossPct  int    `json:"loss_pct"`
+	RTTms    int64  `json:"rtt_ms"`
 }
 
 // Doc is the full status document.

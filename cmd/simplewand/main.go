@@ -25,6 +25,9 @@ import (
 	"github.com/filippo-claude/simplewan/internal/status"
 )
 
+// version is set at build time via -X main.version (see the OpenWrt Makefile).
+var version = "dev"
+
 const (
 	// pingTimeout bounds a single echo; must be < fsm.ProbeInterval.
 	pingTimeout = 1500 * time.Millisecond
@@ -60,8 +63,18 @@ type controller struct {
 func newController(cfg *config.Config) *controller {
 	c := &controller{cfg: cfg, pinger: ping.New()}
 
-	primary := &wan{name: cfg.Primary, primary: true, base: route.IfaceMetric(cfg.Primary, defaultPrimaryMetric)}
-	backup := &wan{name: cfg.Backup, base: route.IfaceMetric(cfg.Backup, defaultBackupMetric)}
+	pBase, pSet := route.IfaceMetric(cfg.Primary, defaultPrimaryMetric)
+	bBase, bSet := route.IfaceMetric(cfg.Backup, defaultBackupMetric)
+	if !pSet || !bSet {
+		log.Printf("warning: set the netifd route metrics (network.%s.metric < network.%s.metric) "+
+			"so the resting routing state matches; otherwise the daemon must keep correcting it",
+			cfg.Primary, cfg.Backup)
+	} else if pBase >= bBase {
+		log.Printf("warning: primary %q metric (%d) is not lower than backup %q metric (%d); "+
+			"the primary will not be preferred at rest", cfg.Primary, pBase, cfg.Backup, bBase)
+	}
+	primary := &wan{name: cfg.Primary, primary: true, base: pBase}
+	backup := &wan{name: cfg.Backup, base: bBase}
 	c.wans = []*wan{primary, backup}
 
 	c.machine = fsm.New([]*fsm.WAN{
@@ -93,6 +106,14 @@ func (c *controller) desiredMetric(selected string) map[string]int {
 }
 
 func (c *controller) enforceLocked() {
+	if c.selected == "" {
+		// We have not validated any WAN yet (startup, or just after a reload).
+		// Leave the routing table exactly as it is: whatever netifd or a prior
+		// daemon instance left in place is already a working state, and resetting
+		// to base metrics here would flip traffic onto the primary before we know
+		// it is healthy — undoing an in-effect failover across a restart.
+		return
+	}
 	desired := c.desiredMetric(c.selected)
 	for _, w := range c.wans {
 		if w.device == "" {
@@ -224,9 +245,17 @@ func (c *controller) writeStatus() {
 				loss = f.LossPercent()
 			}
 		}
+		// Report the metric actually in the kernel, falling back to the metric
+		// we would impose if the WAN currently has no default route. The two
+		// agree once enforcement has converged; before that (e.g. just after a
+		// restart, while selected is still empty) this shows the real state
+		// rather than a metric we have not applied.
+		metric := desired[w.name]
 		hasRoute := false
 		if idx, err := route.LinkIndex(w.device); err == nil {
-			hasRoute = route.HasDefault(idx)
+			if m, ok := route.DefaultMetric(idx); ok {
+				metric, hasRoute = m, true
+			}
 		}
 		doc.Ifaces = append(doc.Ifaces, status.Iface{
 			Name:     w.name,
@@ -236,7 +265,7 @@ func (c *controller) writeStatus() {
 			Online:   online,
 			Selected: w.name == c.selected,
 			HasRoute: hasRoute,
-			Metric:   desired[w.name],
+			Metric:   metric,
 			LossPct:  loss,
 			RTTms:    w.rttms,
 		})
@@ -287,40 +316,25 @@ func main() {
 	}()
 
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 
 	ticker := time.NewTicker(fsm.ProbeInterval)
 	defer ticker.Stop()
 
-	log.Printf("started: target=%s primary=%s backup=%s recovery=%ds",
-		cfg.PingTarget, cfg.Primary, cfg.Backup, cfg.RecoveryTime)
+	log.Printf("started (version %s): target=%s primary=%s backup=%s recovery=%ds",
+		version, cfg.PingTarget, cfg.Primary, cfg.Backup, cfg.RecoveryTime)
 	c.tick(ctx)
 	for {
 		select {
 		case <-ticker.C:
 			c.tick(ctx)
 		case s := <-sig:
-			switch s {
-			case syscall.SIGHUP:
-				newCfg, err := config.Load(*cfgPath)
-				if err != nil {
-					log.Printf("reload: %v (keeping current config)", err)
-					continue
-				}
-				nc := newController(newCfg)
-				c.mu.Lock()
-				c.cfg = nc.cfg
-				c.wans = nc.wans
-				c.machine = nc.machine
-				c.selected = ""
-				c.lastSwitch = time.Time{}
-				c.lastSwitchTo = ""
-				c.mu.Unlock()
-				log.Printf("reloaded config")
-			default:
-				log.Printf("signal %s: exiting (routes left in place)", s)
-				return
-			}
+			// A config change reaches us as a full restart from procd (the init
+			// script gates on `enabled` and leaves the routes in place across
+			// the restart), so there is no in-process reload to do: any signal
+			// we are asked to handle means stop.
+			log.Printf("signal %s: exiting (routes left in place)", s)
+			return
 		}
 	}
 }

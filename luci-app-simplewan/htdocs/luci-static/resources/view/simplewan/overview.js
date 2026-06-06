@@ -9,15 +9,6 @@ const callStatus = rpc.declare({
 	expect: { }
 });
 
-function fmtAge(sec) {
-	if (!sec || sec < 0)
-		return '-';
-	const h = Math.floor(sec / 3600),
-	      m = Math.floor((sec % 3600) / 60),
-	      s = sec % 60;
-	return '%02dh %02dm %02ds'.format(h, m, s);
-}
-
 function render(s) {
 	if (!s || s.running === false)
 		return E('p', { 'class': 'alert-message warning' },

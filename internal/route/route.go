@@ -67,6 +67,20 @@ func ResolveDevice(ifname string) (string, error) {
 	return rest[:b], nil
 }
 
+// isDefaultRoute reports whether r is an IPv4 default route (0.0.0.0/0).
+//
+// A default route cannot be detected with Dst == nil: vishvananda/netlink
+// synthesizes a 0.0.0.0/0 Dst for routes the kernel sends without an RTA_DST
+// attribute, which is exactly how default routes arrive. So a default route has
+// a non-nil Dst with a zero-length mask. Accept both forms.
+func isDefaultRoute(r *netlink.Route) bool {
+	if r.Dst == nil {
+		return true
+	}
+	ones, _ := r.Dst.Mask.Size()
+	return ones == 0
+}
+
 func defaultRoutesByLink() (map[int][]netlink.Route, error) {
 	routes, err := netlink.RouteList(nil, unix.AF_INET)
 	if err != nil {
@@ -74,7 +88,7 @@ func defaultRoutesByLink() (map[int][]netlink.Route, error) {
 	}
 	byLink := map[int][]netlink.Route{}
 	for _, r := range routes {
-		if r.Dst != nil { // default route has a nil destination
+		if !isDefaultRoute(&r) {
 			continue
 		}
 		if r.Table != 0 && r.Table != unix.RT_TABLE_MAIN {
@@ -181,7 +195,7 @@ func Subscribe(ch chan<- struct{}, done <-chan struct{}) error {
 	}
 	go func() {
 		for u := range updates {
-			if u.Route.Dst != nil {
+			if !isDefaultRoute(&u.Route) {
 				continue // only care about default-route churn
 			}
 			select {

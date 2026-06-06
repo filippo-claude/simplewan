@@ -44,6 +44,13 @@ type wan struct {
 	base    int // configured netifd metric
 	device  string
 	rttms   int64
+
+	// diagnostics: latch one-shot log lines so a persistent condition does
+	// not repeat on every probe.
+	lastDevice string
+	resolveErr bool
+	linkErr    bool
+	noRoute    bool
 }
 
 type controller struct {
@@ -138,20 +145,44 @@ func (c *controller) enforce() {
 
 // probe pings the WAN. It returns false without recording a sample when the
 // device is absent or has no default route (the WAN is hard-down); the caller
-// then marks it down so a clean window greets it when it returns.
+// then marks it down so a clean window greets it when it returns. Each
+// transition is logged once, so a WAN stuck offline is diagnosable from logread.
 func (c *controller) probe(w *wan) (sampled, ok bool) {
 	if w.device == "" {
-		if d, err := route.ResolveDevice(w.name); err == nil {
-			w.device = d
-		} else {
+		d, err := route.ResolveDevice(w.name)
+		if err != nil {
+			if !w.resolveErr {
+				log.Printf("interface %s: cannot resolve its L3 device (is it up?): %v", w.name, err)
+				w.resolveErr = true
+			}
 			return false, false
 		}
+		w.resolveErr = false
+		if w.lastDevice != d {
+			log.Printf("interface %s: using device %s", w.name, d)
+			w.lastDevice = d
+		}
+		w.device = d
 	}
 	idx, err := route.LinkIndex(w.device)
-	if err != nil || !route.HasDefault(idx) {
+	if err != nil {
+		if !w.linkErr {
+			log.Printf("interface %s: device %s not present: %v", w.name, w.device, err)
+			w.linkErr = true
+		}
 		w.device = "" // re-resolve next tick in case it changed
 		return false, false
 	}
+	w.linkErr = false
+	if !route.HasDefault(idx) {
+		if !w.noRoute {
+			log.Printf("interface %s (%s): no IPv4 default route in the main table; treating as down", w.name, w.device)
+			w.noRoute = true
+		}
+		w.device = "" // re-resolve next tick in case it changed
+		return false, false
+	}
+	w.noRoute = false
 	rtt, err := c.pinger.Once(w.device, c.cfg.PingTarget, c.seq, pingTimeout)
 	if err == nil {
 		w.rttms = rtt.Milliseconds()

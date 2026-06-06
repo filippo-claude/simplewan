@@ -7,7 +7,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=simplewan
-PKG_VERSION:=0.1.0
+PKG_VERSION:=0.2.0
 PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
@@ -26,7 +26,7 @@ PKG_BUILD_FLAGS:=no-mips16
 
 GO_PKG:=github.com/filippo-claude/simplewan
 GO_PKG_BUILD_PKG:=github.com/filippo-claude/simplewan/cmd/simplewand
-GO_PKG_LDFLAGS_X:=main.version=$(PKG_VERSION)
+GO_PKG_LDFLAGS_X:=main.version=$(PKG_VERSION)-r$(PKG_RELEASE)
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
@@ -37,7 +37,7 @@ define Package/simplewan
   SUBMENU:=Routing and Redirection
   TITLE:=Minimal two-WAN failover daemon
   URL:=https://github.com/filippo-claude/simplewan
-  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +kmod-nf-conntrack
+  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +kmod-nf-conntrack-netlink
 endef
 
 define Package/simplewan/description

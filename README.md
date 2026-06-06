@@ -137,15 +137,15 @@ opkg install simplewan luci-app-simplewan
 
 Download the `.ipk`s and install them directly. No signing key is needed —
 opkg only verifies *feed indexes*, not individual packages installed by path.
-`opkg update` first so dependencies (`ca-bundle`, `kmod-nf-conntrack`,
+`opkg update` first so dependencies (`ca-bundle`, `kmod-nf-conntrack-netlink`,
 `luci-base`) resolve from the official feeds:
 
 ```
 cd /tmp
 opkg update
-wget https://filippo-claude.github.io/simplewan/simplewan_0.1.0-r1_arm_cortex-a9_vfpv3-d16.ipk
-wget https://filippo-claude.github.io/simplewan/luci-app-simplewan_0.1.0-r1_all.ipk
-opkg install ./simplewan_0.1.0-r1_arm_cortex-a9_vfpv3-d16.ipk ./luci-app-simplewan_0.1.0-r1_all.ipk
+wget https://filippo-claude.github.io/simplewan/simplewan_0.2.0-r1_arm_cortex-a9_vfpv3-d16.ipk
+wget https://filippo-claude.github.io/simplewan/luci-app-simplewan_0.2.0-r1_all.ipk
+opkg install ./simplewan_0.2.0-r1_arm_cortex-a9_vfpv3-d16.ipk ./luci-app-simplewan_0.2.0-r1_all.ipk
 ```
 
 (The exact filenames track the version; the current ones are listed in the

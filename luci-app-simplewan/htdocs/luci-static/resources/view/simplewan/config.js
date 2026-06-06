@@ -16,45 +16,23 @@ return view.extend({
 		o = s.option(form.Flag, 'enabled', _('Enabled'));
 		o.rmempty = false;
 
+		o = s.option(form.Value, 'primary', _('Primary interface'),
+			_('Preferred while healthy. Set its metric lower than the backup in the Network config.'));
+		o.datatype = 'string';
+
+		o = s.option(form.Value, 'backup', _('Backup interface'),
+			_('Used when the primary is unhealthy.'));
+		o.datatype = 'string';
+
 		o = s.option(form.Value, 'ping_target', _('Ping target'),
 			_('Single IPv4 address pinged out of each WAN.'));
 		o.datatype = 'ip4addr';
 
-		o = s.option(form.Value, 'interval', _('Check interval (s)'));
-		o.datatype = 'uinteger';
-
-		o = s.option(form.Value, 'timeout', _('Ping timeout (s)'));
-		o.datatype = 'uinteger';
-
-		o = s.option(form.Value, 'count', _('Pings per check'));
-		o.datatype = 'uinteger';
-
-		o = s.option(form.Value, 'down', _('Failed checks to go offline'));
-		o.datatype = 'uinteger';
-
-		o = s.option(form.Value, 'up', _('Good checks to go online'));
-		o.datatype = 'uinteger';
-
 		o = s.option(form.Value, 'recovery_time', _('Recovery hold (s)'),
-			_('How long a preferred WAN must stay healthy before switching back to it.'));
+			_('How long the primary must stay healthy before switching back to it after a failover. Detection cadence and loss thresholds are fixed in the daemon.'));
 		o.datatype = 'uinteger';
 
 		o = s.option(form.Flag, 'flush_conntrack', _('Flush conntrack on switch'));
-
-		s = m.section(form.GridSection, 'interface', _('Interfaces'),
-			_('Lower priority is preferred. The selected WAN keeps its metric; a demoted WAN is pushed above it.'));
-		s.addremove = true;
-		s.anonymous = false;
-		s.nodescriptions = true;
-
-		o = s.option(form.Value, 'ifname', _('Interface'));
-		o.datatype = 'string';
-
-		o = s.option(form.Value, 'metric', _('Metric'));
-		o.datatype = 'uinteger';
-
-		o = s.option(form.Value, 'priority', _('Priority'));
-		o.datatype = 'uinteger';
 
 		s = m.section(form.NamedSection, 'notify', 'notify', _('Email notifications (Postmark)'));
 		s.addremove = false;

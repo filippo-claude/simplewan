@@ -21,7 +21,7 @@ type Iface struct {
 	Name       string `json:"name"`
 	IfName     string `json:"ifname"`
 	Device     string `json:"device"`
-	Priority   int    `json:"priority"`
+	Primary    bool   `json:"primary"`
 	Online     bool   `json:"online"`
 	Selected   bool   `json:"selected"`
 	HasRoute   bool   `json:"has_route"`

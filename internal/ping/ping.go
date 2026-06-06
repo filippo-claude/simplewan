@@ -131,38 +131,3 @@ func (p *Pinger) Once(dev, target string, seq uint16, timeout time.Duration) (ti
 		}
 	}
 }
-
-// Result summarizes one check (several echoes) against a target.
-type Result struct {
-	Sent     int
-	Received int
-	RTT      time.Duration // RTT of the last successful echo
-}
-
-// LossPercent returns packet loss as an integer percentage.
-func (r Result) LossPercent() int {
-	if r.Sent == 0 {
-		return 100
-	}
-	return (r.Sent - r.Received) * 100 / r.Sent
-}
-
-// Check sends count echoes (spaced slightly) and reports how many returned.
-func (p *Pinger) Check(dev, target string, count int, timeout time.Duration) Result {
-	if count < 1 {
-		count = 1
-	}
-	var res Result
-	for i := 0; i < count; i++ {
-		res.Sent++
-		rtt, err := p.Once(dev, target, uint16(i+1), timeout)
-		if err == nil {
-			res.Received++
-			res.RTT = rtt
-		}
-		if i+1 < count {
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
-	return res
-}

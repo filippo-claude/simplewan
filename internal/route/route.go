@@ -13,11 +13,27 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
+
+// IfaceMetric returns the configured netifd route metric for an interface
+// (uci network.<iface>.metric), or dflt if it is unset or unparseable. This is
+// the base metric the daemon keeps the interface at when it is selected, so the
+// resting state matches what netifd installs and needs no correction.
+func IfaceMetric(iface string, dflt int) int {
+	out, err := exec.Command("uci", "-q", "get", fmt.Sprintf("network.%s.metric", iface)).Output()
+	if err != nil {
+		return dflt
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
+		return v
+	}
+	return dflt
+}
 
 // ResolveDevice returns the L3 device for a netifd interface via ubus.
 // It is only used when the config does not pin a device explicitly.

@@ -16,15 +16,6 @@ import (
 // DefaultPath is the on-router location of the configuration file.
 const DefaultPath = "/etc/config/simplewan"
 
-// Iface describes one upstream WAN.
-type Iface struct {
-	Name     string // UCI section name
-	IfName   string // netifd logical interface (e.g. "wan")
-	Device   string // L3 device override (e.g. "eth1"); resolved from IfName if empty
-	Metric   int    // preferred default-route metric when this WAN is selected
-	Priority int    // lower is more preferred; ties broken by config order
-}
-
 // Notify holds the Postmark notification settings.
 type Notify struct {
 	Enabled       bool
@@ -35,18 +26,17 @@ type Notify struct {
 }
 
 // Config is the parsed configuration.
+//
+// Failover behaviour (probe cadence, dead-link and loss thresholds) is fixed in
+// the daemon; recovery_time is the only numeric knob. The primary/backup base
+// route metrics are read from netifd, not configured here.
 type Config struct {
 	Enabled        bool
+	Primary        string // netifd interface preferred while healthy
+	Backup         string // netifd interface to fail over to
 	PingTarget     string // single IPv4 target
-	Interval       int    // seconds between checks
-	Timeout        int    // per-ping timeout, seconds
-	Count          int    // pings sent per check
-	Down           int    // consecutive failed checks to declare a WAN offline
-	Up             int    // consecutive good checks to declare a WAN online
-	RecoveryTime   int    // seconds a preferred WAN must stay healthy before switching back to it
-	DemoteOffset   int    // metric added to demote a WAN below the selected one
+	RecoveryTime   int    // seconds the primary must stay healthy before switching back to it
 	FlushConntrack bool
-	Ifaces         []Iface
 	Notify         Notify
 }
 
@@ -54,13 +44,7 @@ func def() *Config {
 	return &Config{
 		Enabled:        true,
 		PingTarget:     "1.1.1.1",
-		Interval:       5,
-		Timeout:        2,
-		Count:          1,
-		Down:           3,
-		Up:             3,
 		RecoveryTime:   300,
-		DemoteOffset:   1000,
 		FlushConntrack: true,
 	}
 }
@@ -182,29 +166,17 @@ func fromSections(secs []section) (*Config, error) {
 		switch s.typ {
 		case "globals":
 			c.Enabled = boolOpt(s.opts["enabled"], c.Enabled)
+			if v := s.opts["primary"]; v != "" {
+				c.Primary = v
+			}
+			if v := s.opts["backup"]; v != "" {
+				c.Backup = v
+			}
 			if v := s.opts["ping_target"]; v != "" {
 				c.PingTarget = v
 			}
-			c.Interval = intOpt(s.opts["interval"], c.Interval)
-			c.Timeout = intOpt(s.opts["timeout"], c.Timeout)
-			c.Count = intOpt(s.opts["count"], c.Count)
-			c.Down = intOpt(s.opts["down"], c.Down)
-			c.Up = intOpt(s.opts["up"], c.Up)
 			c.RecoveryTime = intOpt(s.opts["recovery_time"], c.RecoveryTime)
-			c.DemoteOffset = intOpt(s.opts["demote_offset"], c.DemoteOffset)
 			c.FlushConntrack = boolOpt(s.opts["flush_conntrack"], c.FlushConntrack)
-		case "interface":
-			it := Iface{
-				Name:     s.name,
-				IfName:   s.opts["ifname"],
-				Device:   s.opts["device"],
-				Metric:   intOpt(s.opts["metric"], 0),
-				Priority: intOpt(s.opts["priority"], len(c.Ifaces)+1),
-			}
-			if it.IfName == "" {
-				it.IfName = s.name
-			}
-			c.Ifaces = append(c.Ifaces, it)
 		case "notify":
 			c.Notify.Enabled = boolOpt(s.opts["enabled"], false)
 			c.Notify.Token = s.opts["postmark_token"]
@@ -213,8 +185,11 @@ func fromSections(secs []section) (*Config, error) {
 			c.Notify.SubjectPrefix = s.opts["subject_prefix"]
 		}
 	}
-	if len(c.Ifaces) < 2 {
-		return nil, fmt.Errorf("need at least two interface sections, found %d", len(c.Ifaces))
+	if c.Primary == "" || c.Backup == "" {
+		return nil, fmt.Errorf("both 'primary' and 'backup' interfaces must be set")
+	}
+	if c.Primary == c.Backup {
+		return nil, fmt.Errorf("'primary' and 'backup' must differ (both %q)", c.Primary)
 	}
 	return c, nil
 }

@@ -24,22 +24,30 @@ without it**:
 
 ## How it works
 
-1. One ICMP echo target is pinged out of **each** WAN, with the socket bound to
-   that WAN's device (`SO_BINDTODEVICE`). Binding is essential: it lets the
-   daemon test a WAN that is *not* currently the default route, so a
+1. One ICMP echo target is pinged out of **each** WAN every 2 s, with the
+   socket bound to that WAN's device (`SO_BINDTODEVICE`). Binding is essential:
+   it lets the daemon test a WAN that is *not* currently the default route, so a
    demoted-but-recovering link can be observed coming back.
-2. Per-WAN hysteresis: a WAN goes offline after `down` consecutive failed
-   checks and back online after `up` consecutive good ones.
-3. Selection: the lowest-`priority` healthy WAN wins. Failing **over** (the
-   current WAN went unhealthy) is immediate. Switching **back** to a
-   more-preferred WAN waits until it has been healthy for `recovery_time`
-   seconds (anti-flap).
-4. The selected WAN keeps its configured `metric`; any WAN that would otherwise
-   outrank it is demoted by `demote_offset`. Metrics are applied
-   make-before-break (add the new metric, then drop the old) so there is never
-   a moment with no default route for a live WAN.
-5. A netlink route monitor re-asserts these metrics whenever netifd re-adds a
-   default route (DHCP/PPPoE renewals).
+2. Health comes from a sliding ~60 s window (fixed in the daemon, not
+   configurable):
+   - a **dead link** is caught fast — 5 consecutive misses (~10 s) → offline;
+   - **high packet loss** is caught over the window — ≥ 10 % loss → offline,
+     and back online once loss drops below 10 % again;
+   - a device that is absent or has no route yet (e.g. PPPoE still negotiating
+     at boot) is treated as a clean "down" and validated from scratch when it
+     returns, rather than carrying stale failures.
+3. Selection: the primary wins while healthy. Failing **over** to the backup
+   (the current WAN went unhealthy) is immediate. Switching **back** to the
+   primary waits until it has been healthy for `recovery_time` seconds — but
+   only after a real failover; at boot the primary is adopted as soon as it
+   validates (~10 s after its link is up).
+4. The selected WAN keeps its base metric (read from netifd, so the resting
+   state matches what netifd installs and needs no correction); the other WAN
+   is demoted above it only when necessary. Metric changes are make-before-break
+   (add the new metric, then drop the old) so there is never a moment with no
+   default route for a live WAN.
+5. A netlink route monitor re-asserts this whenever netifd re-adds a default
+   route (DHCP/PPPoE renewals, or the primary's PPPoE link coming up at boot).
 
 Only IPv4 is handled for now.
 
@@ -47,31 +55,22 @@ Only IPv4 is handled for now.
 
 - Both WANs must be in a masqueraded firewall zone (standard `wan` zone), or
   failover traffic won't be NATed.
+- Set the two WANs' route metrics in the normal Network config so the **primary
+  is lower** (e.g. `wan` = 10, `wan2` = 20). That ordering is how you designate
+  primary vs backup at the routing level; simplewan reads those metrics rather
+  than defining its own.
 - The daemon runs as root (needs raw ICMP sockets); procd handles that.
 
 ## Configuration (`/etc/config/simplewan`)
 
 ```
 config globals 'globals'
-	option enabled '1'
-	option ping_target '1.1.1.1'   # single IPv4 target
-	option interval '5'            # seconds between checks
-	option timeout '2'             # per-ping timeout
-	option count '1'               # pings per check
-	option down '3'                # failed checks -> offline
-	option up '3'                  # good checks -> online
-	option recovery_time '300'     # healthy seconds before switching back
+	option enabled       '1'
+	option primary       'wan'      # preferred while healthy
+	option backup        'wan2'     # failover target
+	option ping_target   '1.1.1.1'  # single IPv4 target
+	option recovery_time '300'      # healthy seconds before switching back
 	option flush_conntrack '1'
-
-config interface 'primary'
-	option ifname 'wan'
-	option metric '10'
-	option priority '1'            # lower = preferred
-
-config interface 'backup'
-	option ifname 'wan2'
-	option metric '20'
-	option priority '2'
 
 config notify 'notify'
 	option enabled '0'
@@ -81,9 +80,9 @@ config notify 'notify'
 	option subject_prefix '[simplewan]'
 ```
 
-Set `metric` to match each interface's netifd metric so the resting state needs
-no intervention. The config file is installed mode `0600` because it holds the
-Postmark token.
+`recovery_time` is the only numeric knob; probe cadence and the dead-link/loss
+thresholds are fixed in the daemon. The config file is installed mode `0600`
+because it holds the Postmark token.
 
 ## Email notifications (Postmark)
 

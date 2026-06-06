@@ -31,7 +31,7 @@ function render(s) {
 			E('td', { 'class': 'td' }, [
 				E('span', { 'class': 'label ' + (i.online ? 'success' : 'danger') },
 					[ i.online ? _('online') : _('offline') ]) ]),
-			E('td', { 'class': 'td' }, [ String(i.priority) ]),
+			E('td', { 'class': 'td' }, [ i.primary ? _('primary') : _('backup') ]),
 			E('td', { 'class': 'td' }, [ String(i.metric) ]),
 			E('td', { 'class': 'td' }, [ i.has_route ? _('yes') : _('no') ]),
 			E('td', { 'class': 'td' }, [ (i.loss_pct != null ? i.loss_pct + '%' : '-') ]),
@@ -54,7 +54,7 @@ function render(s) {
 				E('th', { 'class': 'th' }, [ _('WAN') ]),
 				E('th', { 'class': 'th' }, [ _('Interface') ]),
 				E('th', { 'class': 'th' }, [ _('Health') ]),
-				E('th', { 'class': 'th' }, [ _('Priority') ]),
+				E('th', { 'class': 'th' }, [ _('Role') ]),
 				E('th', { 'class': 'th' }, [ _('Metric') ]),
 				E('th', { 'class': 'th' }, [ _('Has route') ]),
 				E('th', { 'class': 'th' }, [ _('Loss') ]),

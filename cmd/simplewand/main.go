@@ -1,9 +1,9 @@
 // Command simplewand is a minimal two-WAN failover daemon for OpenWrt.
 //
 // It pings a single target out of each WAN (bound to that WAN's device), tracks
-// health with hysteresis, and reorders the IPv4 default routes in the main
-// table so the preferred healthy WAN wins. It never blackholes traffic: if no
-// WAN looks healthy it leaves routing untouched, and if the daemon dies the
+// health with a sliding window, and reorders the IPv4 default routes in the
+// main table so the preferred healthy WAN wins. It never blackholes traffic: if
+// no WAN looks healthy it leaves routing untouched, and if the daemon dies the
 // last-good routes simply remain in place.
 package main
 
@@ -11,7 +11,6 @@ import (
 	"context"
 	"flag"
 	"log"
-	"math"
 	"os"
 	"os/signal"
 	"sync"
@@ -26,12 +25,22 @@ import (
 	"github.com/filippo-claude/simplewan/internal/status"
 )
 
+const (
+	// pingTimeout bounds a single echo; must be < fsm.ProbeInterval.
+	pingTimeout = 1500 * time.Millisecond
+	// demoteOffset is added to push a demoted WAN above the selected one.
+	demoteOffset = 1000
+	// default base metrics when netifd has none configured (primary < backup).
+	defaultPrimaryMetric = 10
+	defaultBackupMetric  = 20
+)
+
 type wan struct {
-	cfg    config.Iface
-	device string
-	lastOK bool
-	loss   int
-	rttms  int64
+	name    string // netifd interface
+	primary bool
+	base    int // configured netifd metric
+	device  string
+	rttms   int64
 }
 
 type controller struct {
@@ -41,6 +50,7 @@ type controller struct {
 	wans    []*wan
 	machine *fsm.Machine
 	pinger  *ping.Pinger
+	seq     uint16
 
 	selected     string
 	lastSwitch   time.Time
@@ -49,54 +59,37 @@ type controller struct {
 
 func newController(cfg *config.Config) *controller {
 	c := &controller{cfg: cfg, pinger: ping.New()}
-	var fwans []*fsm.WAN
-	for _, it := range cfg.Ifaces {
-		w := &wan{cfg: it}
-		dev := it.Device
-		if dev == "" {
-			if d, err := route.ResolveDevice(it.IfName); err != nil {
-				log.Printf("interface %s: cannot resolve device yet: %v", it.Name, err)
-			} else {
-				dev = d
-			}
-		}
-		w.device = dev
-		c.wans = append(c.wans, w)
-		fwans = append(fwans, &fsm.WAN{Name: it.Name, Priority: it.Priority})
-	}
-	c.machine = fsm.New(fwans, cfg.Up, cfg.Down, time.Duration(cfg.RecoveryTime)*time.Second)
+
+	primary := &wan{name: cfg.Primary, primary: true, base: route.IfaceMetric(cfg.Primary, defaultPrimaryMetric)}
+	backup := &wan{name: cfg.Backup, base: route.IfaceMetric(cfg.Backup, defaultBackupMetric)}
+	c.wans = []*wan{primary, backup}
+
+	c.machine = fsm.New([]*fsm.WAN{
+		{Name: primary.name, Priority: 1},
+		{Name: backup.name, Priority: 2},
+	}, time.Duration(cfg.RecoveryTime)*time.Second)
 	return c
 }
 
 // desiredMetric computes the target metric for each WAN given the selection.
-// The selected WAN (and any WAN already worse than it) keeps its base metric;
-// any WAN that would otherwise be preferred over the selected one is demoted.
+// The selected WAN keeps its base metric (matching netifd, so no churn); a WAN
+// that would otherwise outrank the selected one is demoted above it.
 func (c *controller) desiredMetric(selected string) map[string]int {
-	selMetric := math.MaxInt
-	if selected != "" {
-		for _, w := range c.wans {
-			if w.cfg.Name == selected {
-				selMetric = w.cfg.Metric
-			}
+	selBase := 0
+	for _, w := range c.wans {
+		if w.name == selected {
+			selBase = w.base
 		}
 	}
 	out := map[string]int{}
 	for _, w := range c.wans {
-		if selected == "" || w.cfg.Name == selected || w.cfg.Metric > selMetric {
-			out[w.cfg.Name] = w.cfg.Metric
+		if selected == "" || w.name == selected || w.base > selBase {
+			out[w.name] = w.base
 		} else {
-			out[w.cfg.Name] = w.cfg.Metric + c.cfg.DemoteOffset
+			out[w.name] = selBase + demoteOffset
 		}
 	}
 	return out
-}
-
-// enforce applies the desired metrics. It is idempotent, so it is safe to call
-// both on each tick and from the route-change reconciler.
-func (c *controller) enforce() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.enforceLocked()
 }
 
 func (c *controller) enforceLocked() {
@@ -109,35 +102,53 @@ func (c *controller) enforceLocked() {
 		if err != nil {
 			continue // device not present: WAN is down, nothing to reorder
 		}
-		if _, err := route.EnsureMetric(idx, desired[w.cfg.Name]); err != nil {
+		if _, err := route.EnsureMetric(idx, desired[w.name]); err != nil {
 			log.Printf("interface %s (%s): enforce metric %d: %v",
-				w.cfg.Name, w.device, desired[w.cfg.Name], err)
+				w.name, w.device, desired[w.name], err)
 		}
 	}
 }
 
-func (c *controller) probe(w *wan) bool {
+func (c *controller) enforce() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.enforceLocked()
+}
+
+// probe pings the WAN. It returns false without recording a sample when the
+// device is absent or has no default route (the WAN is hard-down); the caller
+// then marks it down so a clean window greets it when it returns.
+func (c *controller) probe(w *wan) (sampled, ok bool) {
 	if w.device == "" {
-		if d, err := route.ResolveDevice(w.cfg.IfName); err == nil {
+		if d, err := route.ResolveDevice(w.name); err == nil {
 			w.device = d
 		} else {
-			return false
+			return false, false
 		}
 	}
-	res := c.pinger.Check(w.device, c.cfg.PingTarget, c.cfg.Count, time.Duration(c.cfg.Timeout)*time.Second)
-	w.loss = res.LossPercent()
-	w.rttms = res.RTT.Milliseconds()
-	w.lastOK = res.Received > 0
-	return w.lastOK
+	idx, err := route.LinkIndex(w.device)
+	if err != nil || !route.HasDefault(idx) {
+		w.device = "" // re-resolve next tick in case it changed
+		return false, false
+	}
+	rtt, err := c.pinger.Once(w.device, c.cfg.PingTarget, c.seq, pingTimeout)
+	if err == nil {
+		w.rttms = rtt.Milliseconds()
+	}
+	return true, err == nil
 }
 
 func (c *controller) tick(ctx context.Context) {
 	now := time.Now()
 
 	c.mu.Lock()
+	c.seq++
 	for _, w := range c.wans {
-		ok := c.probe(w)
-		c.machine.Observe(w.cfg.Name, ok, now)
+		if sampled, ok := c.probe(w); sampled {
+			c.machine.Observe(w.name, ok, now)
+		} else {
+			c.machine.MarkDown(w.name)
+		}
 	}
 	selected, changed := c.machine.Decide(now)
 	prev := c.selected
@@ -182,14 +193,12 @@ func (c *controller) onSwitch(ctx context.Context, prev, selected string) {
 func switchMessage(prev, selected string) (subject, body string) {
 	ts := time.Now().Format(time.RFC1123)
 	if prev == "" {
-		subject = "WAN selected: " + selected
-		body = "simplewan selected upstream " + selected + " at " + ts + "."
-		return
+		return "WAN selected: " + selected,
+			"simplewan selected upstream " + selected + " at " + ts + "."
 	}
-	subject = "WAN failover: " + prev + " -> " + selected
-	body = "simplewan switched upstream from " + prev + " to " + selected +
-		" at " + ts + " (previous upstream unhealthy or a more-preferred one recovered)."
-	return
+	return "WAN failover: " + prev + " -> " + selected,
+		"simplewan switched upstream from " + prev + " to " + selected +
+			" at " + ts + " (previous upstream unhealthy, or a more-preferred one recovered)."
 }
 
 func (c *controller) writeStatus() {
@@ -205,28 +214,30 @@ func (c *controller) writeStatus() {
 	if !c.lastSwitch.IsZero() {
 		doc.LastSwitch = c.lastSwitch.Unix()
 	}
+	fws := c.machine.WANs()
 	for _, w := range c.wans {
+		var online bool
+		var loss int = 100
+		for _, f := range fws {
+			if f.Name == w.name {
+				online = f.Online()
+				loss = f.LossPercent()
+			}
+		}
 		hasRoute := false
 		if idx, err := route.LinkIndex(w.device); err == nil {
 			hasRoute = route.HasDefault(idx)
 		}
-		fw := c.machine.WANs()
-		online := false
-		for _, f := range fw {
-			if f.Name == w.cfg.Name {
-				online = f.Online()
-			}
-		}
 		doc.Ifaces = append(doc.Ifaces, status.Iface{
-			Name:     w.cfg.Name,
-			IfName:   w.cfg.IfName,
+			Name:     w.name,
+			IfName:   w.name,
 			Device:   w.device,
-			Priority: w.cfg.Priority,
+			Primary:  w.primary,
 			Online:   online,
-			Selected: w.cfg.Name == c.selected,
+			Selected: w.name == c.selected,
 			HasRoute: hasRoute,
-			Metric:   desired[w.cfg.Name],
-			LossPct:  w.loss,
+			Metric:   desired[w.name],
+			LossPct:  loss,
 			RTTms:    w.rttms,
 		})
 	}
@@ -256,7 +267,8 @@ func main() {
 	c := newController(cfg)
 
 	// Reconciler: re-assert our intent whenever the kernel's default routes
-	// change (e.g. netifd re-adds a route after a DHCP/PPPoE renewal).
+	// change (e.g. netifd re-adds a route after a DHCP/PPPoE renewal, or as
+	// soon as the primary's PPPoE link comes up at boot).
 	wake := make(chan struct{}, 1)
 	done := make(chan struct{})
 	defer close(done)
@@ -277,10 +289,11 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 
-	ticker := time.NewTicker(time.Duration(cfg.Interval) * time.Second)
+	ticker := time.NewTicker(fsm.ProbeInterval)
 	defer ticker.Stop()
 
-	log.Printf("started: target=%s interval=%ds interfaces=%d", cfg.PingTarget, cfg.Interval, len(cfg.Ifaces))
+	log.Printf("started: target=%s primary=%s backup=%s recovery=%ds",
+		cfg.PingTarget, cfg.Primary, cfg.Backup, cfg.RecoveryTime)
 	c.tick(ctx)
 	for {
 		select {
@@ -296,8 +309,6 @@ func main() {
 				}
 				nc := newController(newCfg)
 				c.mu.Lock()
-				// Adopt the new config and freshly-built state; routes are
-				// left as-is (the new tick will reconverge).
 				c.cfg = nc.cfg
 				c.wans = nc.wans
 				c.machine = nc.machine

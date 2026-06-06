@@ -1,28 +1,17 @@
 config globals 'globals'
 	option enabled '1'
-	# Single IPv4 target pinged out of each WAN.
+	# Interface preferred while healthy, and the one to fail over to.
+	# Set their route metrics in the normal Network config so the primary
+	# is lower (e.g. wan=10, wan2=20); simplewan reads those.
+	option primary 'wan'
+	option backup 'wan2'
+	# Single IPv4 target, pinged out of each WAN.
 	option ping_target '1.1.1.1'
-	option interval '5'
-	option timeout '2'
-	option count '1'
-	# Consecutive failed/good checks to flip a WAN offline/online.
-	option down '3'
-	option up '3'
-	# Seconds the preferred WAN must stay healthy before switching back to it.
+	# Seconds the primary must stay healthy before switching back to it after
+	# a failover. (Detection cadence and thresholds are fixed in the daemon:
+	# ~10s to catch a dead link, ~60s window for high packet loss.)
 	option recovery_time '300'
 	option flush_conntrack '1'
-
-# Lower priority is preferred. The selected WAN's default route keeps its
-# 'metric'; a demoted WAN is pushed above the selected one.
-config interface 'primary'
-	option ifname 'wan'
-	option metric '10'
-	option priority '1'
-
-config interface 'backup'
-	option ifname 'wan2'
-	option metric '20'
-	option priority '2'
 
 # Optional email via Postmark. The token lives here; this file is installed
 # mode 0600. Leave enabled '0' to disable.

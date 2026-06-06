@@ -1,0 +1,34 @@
+config globals 'globals'
+	option enabled '1'
+	# Single IPv4 target pinged out of each WAN.
+	option ping_target '1.1.1.1'
+	option interval '5'
+	option timeout '2'
+	option count '1'
+	# Consecutive failed/good checks to flip a WAN offline/online.
+	option down '3'
+	option up '3'
+	# Seconds the preferred WAN must stay healthy before switching back to it.
+	option recovery_time '300'
+	option flush_conntrack '1'
+
+# Lower priority is preferred. The selected WAN's default route keeps its
+# 'metric'; a demoted WAN is pushed above the selected one.
+config interface 'primary'
+	option ifname 'wan'
+	option metric '10'
+	option priority '1'
+
+config interface 'backup'
+	option ifname 'wan2'
+	option metric '20'
+	option priority '2'
+
+# Optional email via Postmark. The token lives here; this file is installed
+# mode 0600. Leave enabled '0' to disable.
+config notify 'notify'
+	option enabled '0'
+	option postmark_token ''
+	option mail_from 'router@example.com'
+	option mail_to 'you@example.com'
+	option subject_prefix '[simplewan]'

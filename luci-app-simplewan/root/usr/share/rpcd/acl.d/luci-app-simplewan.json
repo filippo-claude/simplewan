@@ -1,0 +1,12 @@
+{
+	"luci-app-simplewan": {
+		"description": "Grant access to SimpleWAN failover status and configuration",
+		"read": {
+			"ubus": { "simplewan": [ "status" ] },
+			"uci": [ "simplewan" ]
+		},
+		"write": {
+			"uci": [ "simplewan" ]
+		}
+	}
+}

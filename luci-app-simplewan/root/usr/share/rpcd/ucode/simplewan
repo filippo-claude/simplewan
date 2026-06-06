@@ -1,0 +1,22 @@
+'use strict';
+
+import { readfile } from 'fs';
+
+const methods = {
+	status: {
+		call: function() {
+			const raw = readfile('/var/run/simplewan/status.json');
+			if (!raw)
+				return { running: false };
+			try {
+				const doc = json(raw);
+				doc.running = true;
+				return doc;
+			} catch (e) {
+				return { running: false };
+			}
+		}
+	}
+};
+
+return { simplewan: methods };

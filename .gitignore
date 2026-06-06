@@ -1,0 +1,6 @@
+/public/
+*.ipk
+*.sec
+key-build
+key-build.pub
+/tmp/

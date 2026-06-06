@@ -32,8 +32,12 @@ make package/luci-app-simplewan/compile V=s
 
 mkdir -p "$OUT"
 rm -f "$OUT"/*.ipk
-find bin/packages -name '*.ipk' -exec cp {} "$OUT/" \;
+for p in simplewan luci-app-simplewan; do
+	find bin/packages -name "${p}_*.ipk" -exec cp {} "$OUT/" \;
+done
 
+# ipkg-make-index.sh hashes packages via $MKHASH (normally exported by make).
+export MKHASH="$SDK/staging_dir/host/bin/mkhash"
 ( cd "$OUT" && "$SDK/scripts/ipkg-make-index.sh" . > Packages && gzip -fk Packages )
 
 echo

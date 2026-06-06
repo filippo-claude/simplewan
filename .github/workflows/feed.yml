@@ -68,7 +68,12 @@ jobs:
           set -eux
           OUT="$GITHUB_WORKSPACE/public"
           mkdir -p "$OUT"
-          find "$SDK_DIR/bin/packages" -name '*.ipk' -exec cp {} "$OUT/" \;
+          # Publish only our packages; dependencies come from the official feeds.
+          for p in simplewan luci-app-simplewan; do
+            find "$SDK_DIR/bin/packages" -name "${p}_*.ipk" -exec cp {} "$OUT/" \;
+          done
+          # ipkg-make-index.sh hashes packages via $MKHASH (set by make, not here).
+          export MKHASH="$SDK_DIR/staging_dir/host/bin/mkhash"
           ( cd "$OUT" && "$SDK_DIR/scripts/ipkg-make-index.sh" . > Packages && gzip -fk Packages )
           cp "$GITHUB_WORKSPACE/feed/simplewan-feed.pub" "$OUT/"
 

@@ -118,7 +118,7 @@ The feed index is signed with `usign`. The **public** key is committed at
 repository Actions secret — never in the repo or the published site. Whoever
 holds that secret can publish packages the router will trust automatically.
 
-### Installing on the router
+### Installing from the feed
 
 ```
 # trust the feed's signing key
@@ -126,21 +126,40 @@ echo 'RWSRMyilaOeLRofZWUzeLc9CEK8XGijN6sv5UJ32hIlNX021r7nLPJ7I' \
 	> /etc/opkg/keys/913328a568e78b46
 
 # add the feed
-echo 'src/gz simplewan https://<user>.github.io/simplewan' \
+echo 'src/gz simplewan https://filippo-claude.github.io/simplewan' \
 	>> /etc/opkg/customfeeds.conf
 
 opkg update
 opkg install simplewan luci-app-simplewan
 ```
 
+### Installing one-off (without adding the feed)
+
+Download the `.ipk`s and install them directly. No signing key is needed —
+opkg only verifies *feed indexes*, not individual packages installed by path.
+`opkg update` first so dependencies (`ca-bundle`, `kmod-nf-conntrack`,
+`luci-base`) resolve from the official feeds:
+
+```
+cd /tmp
+opkg update
+wget https://filippo-claude.github.io/simplewan/simplewan_0.1.0-r1_arm_cortex-a9_vfpv3-d16.ipk
+wget https://filippo-claude.github.io/simplewan/luci-app-simplewan_0.1.0-r1_all.ipk
+opkg install ./simplewan_0.1.0-r1_arm_cortex-a9_vfpv3-d16.ipk ./luci-app-simplewan_0.1.0-r1_all.ipk
+```
+
+(The exact filenames track the version; the current ones are listed in the
+feed's `Packages` file at the URL above.)
+
 ### Surviving firmware upgrades
 
 `/etc/config/simplewan` is a conffile, so sysupgrade preserves your settings.
 The package itself is **not** automatically reinstalled by a plain sysupgrade —
-just run `opkg install simplewan luci-app-simplewan` again from the feed after
-upgrading (or bake it into a custom image).
+just run `opkg install simplewan luci-app-simplewan` again after upgrading (or
+bake it into a custom image).
 
 ## Status
 
-Early. The Go daemon and its logic are tested; the SDK build and the CI feed
-workflow have not yet been validated end-to-end on real hardware.
+Early. The Go daemon and its logic are unit-tested and the CI feed build is
+validated end-to-end; the on-router behaviour (device resolution, probing,
+route reordering) has not yet been exercised on real hardware.
